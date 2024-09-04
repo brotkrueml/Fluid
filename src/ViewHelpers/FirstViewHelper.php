@@ -29,7 +29,7 @@ final class FirstViewHelper extends AbstractViewHelper
 {
     public function initializeArguments(): void
     {
-        $this->registerArgument('value', 'array', '');
+        $this->registerArgument('value', 'array', 'This is only a test: :ref:`width <t3tsref:imgresource-width>`');
     }
 
     public function render(): mixed
