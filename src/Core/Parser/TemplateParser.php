@@ -22,6 +22,7 @@ use TYPO3Fluid\Fluid\Core\Parser\SyntaxTree\ViewHelperNode;
 use TYPO3Fluid\Fluid\Core\Rendering\RenderingContextInterface;
 use TYPO3Fluid\Fluid\Core\ViewHelper\ArgumentDefinition;
 use TYPO3Fluid\Fluid\Core\ViewHelper\ViewHelperInterface;
+use TYPO3Fluid\Fluid\Core\ViewHelper\ViewHelperResolver;
 
 /**
  * Template parser building up an object syntax tree.
@@ -51,6 +52,8 @@ class TemplateParser
 
     protected RenderingContextInterface $renderingContext;
 
+    protected ?ViewHelperResolver $fallbackViewHelperResolver = null;
+
     protected int $pointerLineNumber = 1;
 
     protected int $pointerLineCharacter = 1;
@@ -66,6 +69,11 @@ class TemplateParser
     {
         $this->renderingContext = $renderingContext;
         $this->configuration = $renderingContext->buildParserConfiguration();
+    }
+
+    public function setFallbackViewHelperResolver(?ViewHelperResolver $fallbackViewHelperResolver): void
+    {
+        $this->fallbackViewHelperResolver = $fallbackViewHelperResolver;
     }
 
     /**
@@ -107,7 +115,7 @@ class TemplateParser
             $templateString = $this->preProcessTemplateSource($templateString);
 
             $splitTemplate = $this->splitTemplateAtDynamicTags($templateString);
-            $parsingState = $this->buildObjectTree($splitTemplate, self::CONTEXT_OUTSIDE_VIEWHELPER_ARGUMENTS);
+            $parsingState = $this->buildObjectTree($splitTemplate, self::CONTEXT_OUTSIDE_VIEWHELPER_ARGUMENTS, $templateIdentifier);
         } catch (Exception $error) {
             throw $this->createParsingRelatedExceptionWithContext($error, $templateIdentifier);
         }
@@ -209,9 +217,10 @@ class TemplateParser
      *
      * @param array $splitTemplate The split template, so that every tag with a namespace declaration is already a seperate array element.
      * @param int $context one of the CONTEXT_* constants, defining whether we are inside or outside of ViewHelper arguments currently.
+     * @param string|null $templateIdentifier If the template has an identifying string it can be passed here to improve error reporting.
      * @throws Exception
      */
-    protected function buildObjectTree(array $splitTemplate, int $context): ParsingState
+    protected function buildObjectTree(array $splitTemplate, int $context, ?string $templateIdentifier = null): ParsingState
     {
         $state = $this->getParsingState();
         $previousBlock = '';
@@ -237,6 +246,7 @@ class TemplateParser
                         $matchedVariables['Attributes'],
                         ($matchedVariables['Selfclosing'] === '' ? false : true),
                         $templateElement,
+                        $templateIdentifier,
                     )) {
                         continue;
                     }
@@ -280,15 +290,26 @@ class TemplateParser
      * @param string $arguments Arguments string, not yet parsed
      * @param bool $selfclosing true, if the tag is a self-closing tag.
      * @param string $templateElement The template code containing the ViewHelper call
+     * @param string|null $templateIdentifier If the template has an identifying string it can be passed here to improve error reporting.
      */
-    protected function openingViewHelperTagHandler(ParsingState $state, string $namespaceIdentifier, string $methodIdentifier, string $arguments, bool $selfclosing, string $templateElement): ?NodeInterface
+    protected function openingViewHelperTagHandler(ParsingState $state, string $namespaceIdentifier, string $methodIdentifier, string $arguments, bool $selfclosing, string $templateElement, ?string $templateIdentifier = null): ?NodeInterface
     {
         $viewHelperResolver = $this->renderingContext->getViewHelperResolver();
         if ($viewHelperResolver->isNamespaceIgnored($namespaceIdentifier)) {
             return null;
         }
         if (!$viewHelperResolver->isNamespaceValid($namespaceIdentifier)) {
-            throw new UnknownNamespaceException('Unknown Namespace: ' . $namespaceIdentifier);
+            if ($this->fallbackViewHelperResolver && $this->fallbackViewHelperResolver->isNamespaceValid($namespaceIdentifier)) {
+                $viewHelperResolver = $this->fallbackViewHelperResolver;
+                trigger_error(sprintf(
+                    'The namespace "%s" of ViewHelper "%s" was neither defined globally in the view object nor locally in the template file "%s". Inheritance of ViewHelper namespaces from parent templates is deprecated and will stop working with Fluid v5.',
+                    $namespaceIdentifier,
+                    $methodIdentifier,
+                    $templateIdentifier,
+                ), E_USER_DEPRECATED);
+            } else {
+                throw new UnknownNamespaceException('Unknown Namespace: ' . $namespaceIdentifier);
+            }
         }
 
         $viewHelper = $viewHelperResolver->createViewHelperInstance($namespaceIdentifier, $methodIdentifier);
@@ -329,7 +350,11 @@ class TemplateParser
             return null;
         }
         if (!$viewHelperResolver->isNamespaceValid($namespaceIdentifier)) {
-            throw new UnknownNamespaceException('Unknown Namespace: ' . $namespaceIdentifier);
+            if ($this->fallbackViewHelperResolver && $this->fallbackViewHelperResolver->isNamespaceValid($namespaceIdentifier)) {
+                $viewHelperResolver = $this->fallbackViewHelperResolver;
+            } else {
+                throw new UnknownNamespaceException('Unknown Namespace: ' . $namespaceIdentifier);
+            }
         }
         try {
             $currentViewHelperNode = new ViewHelperNode(
@@ -337,6 +362,7 @@ class TemplateParser
                 $namespaceIdentifier,
                 $methodIdentifier,
                 $argumentsObjectTree,
+                $viewHelperResolver
             );
 
             $this->callInterceptor($currentViewHelperNode, InterceptorInterface::INTERCEPT_OPENING_VIEWHELPER, $state);
@@ -374,7 +400,11 @@ class TemplateParser
             return false;
         }
         if (!$viewHelperResolver->isNamespaceValid($namespaceIdentifier)) {
-            throw new UnknownNamespaceException('Unknown Namespace: ' . $namespaceIdentifier);
+            if ($this->fallbackViewHelperResolver && $this->fallbackViewHelperResolver->isNamespaceValid($namespaceIdentifier)) {
+                $viewHelperResolver = $this->fallbackViewHelperResolver;
+            } else {
+                throw new UnknownNamespaceException('Unknown Namespace: ' . $namespaceIdentifier);
+            }
         }
         $lastStackElement = $state->popNodeFromStack();
         if (!($lastStackElement instanceof ViewHelperNode)) {
@@ -422,10 +452,15 @@ class TemplateParser
             // The last ViewHelper has to be added first for correct chaining.
             // Note that ignoring namespaces is NOT possible in inline syntax; any inline syntax that contains a namespace
             // which is invalid will be reported as an error regardless of whether the namespace is marked as ignored.
-            $viewHelperResolver = $this->renderingContext->getViewHelperResolver();
             foreach (array_reverse($matches) as $singleMatch) {
+                $viewHelperResolver = $this->renderingContext->getViewHelperResolver();
                 if (!$viewHelperResolver->isNamespaceValid($singleMatch['NamespaceIdentifier'])) {
-                    throw new UnknownNamespaceException('Unknown Namespace: ' . $singleMatch['NamespaceIdentifier']);
+                    if ($this->fallbackViewHelperResolver && $this->fallbackViewHelperResolver->isNamespaceValid($singleMatch['NamespaceIdentifier'])) {
+                        $viewHelperResolver = $this->fallbackViewHelperResolver;
+                        trigger_error('Inheritance of ViewHelper namespaces is deprecated and will stop working with Fluid v5. ViewHelpers namespaces must be either defined directly on the View or in each templates.', E_USER_DEPRECATED);
+                    } else {
+                        throw new UnknownNamespaceException('Unknown Namespace: ' . $singleMatch['NamespaceIdentifier']);
+                    }
                 }
                 $viewHelper = $viewHelperResolver->createViewHelperInstance($singleMatch['NamespaceIdentifier'], $singleMatch['MethodIdentifier']);
                 if (strlen($singleMatch['ViewHelperArguments']) > 0) {

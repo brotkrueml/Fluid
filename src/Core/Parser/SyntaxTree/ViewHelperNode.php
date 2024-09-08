@@ -13,6 +13,7 @@ use TYPO3Fluid\Fluid\Core\Compiler\TemplateCompiler;
 use TYPO3Fluid\Fluid\Core\Rendering\RenderingContextInterface;
 use TYPO3Fluid\Fluid\Core\ViewHelper\ArgumentDefinition;
 use TYPO3Fluid\Fluid\Core\ViewHelper\ViewHelperInterface;
+use TYPO3Fluid\Fluid\Core\ViewHelper\ViewHelperResolver;
 
 /**
  * Node which will call a ViewHelper associated with this node.
@@ -41,9 +42,9 @@ class ViewHelperNode extends AbstractNode
      * @param string $identifier the name of the ViewHelper to render, inside the namespace provided.
      * @param NodeInterface[] $arguments Arguments of view helper - each value is a RootNode.
      */
-    public function __construct(RenderingContextInterface $renderingContext, string $namespace, string $identifier, array $arguments)
+    public function __construct(RenderingContextInterface $renderingContext, string $namespace, string $identifier, array $arguments, ?ViewHelperResolver $resolver = null)
     {
-        $resolver = $renderingContext->getViewHelperResolver();
+        $resolver ??= $renderingContext->getViewHelperResolver();
         $this->arguments = $arguments;
         $this->viewHelperClassName = $resolver->resolveViewHelperClassName($namespace, $identifier);
         $this->uninitializedViewHelper = $resolver->createViewHelperInstanceFromClassName($this->viewHelperClassName);

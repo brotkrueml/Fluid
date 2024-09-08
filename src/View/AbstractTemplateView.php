@@ -129,8 +129,15 @@ abstract class AbstractTemplateView extends AbstractView implements TemplateAwar
     public function render($actionName = null)
     {
         $renderingContext = $this->getCurrentRenderingContext();
-        $templateParser = $renderingContext->getTemplateParser();
         $templatePaths = $renderingContext->getTemplatePaths();
+
+        $renderingContext = clone $renderingContext;
+        $renderingContext->setViewHelperResolver(clone $this->baseRenderingContext->getViewHelperResolver());
+        $renderingContext->setTemplateParser(clone $renderingContext->getTemplateParser());
+        $renderingContext->getTemplateParser()->setFallbackViewHelperResolver($this->getCurrentRenderingContext()->getViewHelperResolver());
+
+        $templateParser = $renderingContext->getTemplateParser();
+
         if ($actionName) {
             $actionName = ucfirst($actionName);
             $renderingContext->setControllerAction($actionName);
@@ -141,12 +148,13 @@ abstract class AbstractTemplateView extends AbstractView implements TemplateAwar
             return $error->getSource();
         }
 
+
         if (!$parsedTemplate->hasLayout()) {
-            $this->startRendering(self::RENDERING_TEMPLATE, $parsedTemplate, $this->baseRenderingContext);
-            $output = $parsedTemplate->render($this->baseRenderingContext);
+            $this->startRendering(self::RENDERING_TEMPLATE, $parsedTemplate, $renderingContext);
+            $output = $parsedTemplate->render($renderingContext);
             $this->stopRendering();
         } else {
-            $layoutName = (string)$parsedTemplate->getLayoutName($this->baseRenderingContext);
+            $layoutName = (string)$parsedTemplate->getLayoutName($renderingContext);
             try {
                 $parsedLayout = $templateParser->getOrParseAndStoreTemplate(
                     $templatePaths->getLayoutIdentifier($layoutName),
@@ -157,8 +165,8 @@ abstract class AbstractTemplateView extends AbstractView implements TemplateAwar
             } catch (PassthroughSourceException $error) {
                 return $error->getSource();
             }
-            $this->startRendering(self::RENDERING_LAYOUT, $parsedTemplate, $this->baseRenderingContext);
-            $output = $parsedLayout->render($this->baseRenderingContext);
+            $this->startRendering(self::RENDERING_LAYOUT, $parsedTemplate, $renderingContext);
+            $output = $parsedLayout->render($renderingContext);
             $this->stopRendering();
         }
 
@@ -184,6 +192,9 @@ abstract class AbstractTemplateView extends AbstractView implements TemplateAwar
         } else {
             $renderingContext = clone $renderingContext;
             $renderingContext->setVariableProvider($renderingContext->getVariableProvider()->getScopeCopy($variables));
+            $renderingContext->setViewHelperResolver(clone $this->baseRenderingContext->getViewHelperResolver());
+            $renderingContext->setTemplateParser(clone $renderingContext->getTemplateParser());
+            $renderingContext->getTemplateParser()->setFallbackViewHelperResolver($this->getCurrentRenderingContext()->getViewHelperResolver());
             $renderingTypeOnNextLevel = $this->getCurrentRenderingType();
         }
 
@@ -258,6 +269,9 @@ abstract class AbstractTemplateView extends AbstractView implements TemplateAwar
     {
         $templatePaths = $this->baseRenderingContext->getTemplatePaths();
         $renderingContext = clone $this->getCurrentRenderingContext();
+        $renderingContext->setViewHelperResolver(clone $this->baseRenderingContext->getViewHelperResolver());
+        $renderingContext->setTemplateParser(clone $renderingContext->getTemplateParser());
+        $renderingContext->getTemplateParser()->setFallbackViewHelperResolver($this->getCurrentRenderingContext()->getViewHelperResolver());
         try {
             $parsedPartial = $renderingContext->getTemplateParser()->getOrParseAndStoreTemplate(
                 $templatePaths->getPartialIdentifier($partialName),
@@ -348,7 +362,7 @@ abstract class AbstractTemplateView extends AbstractView implements TemplateAwar
             },
         );
         if ($parsedTemplate->isCompiled()) {
-            $parsedTemplate->addCompiledNamespaces($this->baseRenderingContext);
+            $parsedTemplate->addCompiledNamespaces($renderingContext);
         }
         return $parsedTemplate;
     }
